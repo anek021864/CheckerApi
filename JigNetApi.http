@@ -1,0 +1,6 @@
+@JigNetApi_HostAddress = http://localhost:5027
+
+GET {{JigNetApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
