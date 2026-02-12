@@ -8,7 +8,7 @@ using RabbitMQ.Client.Events;
 
 namespace JigNetApi;
 
-public class IotWorkerService : BackgroundService
+public class IotWorkerService2 : BackgroundService
 { // สร้างตัวแปร static เพื่อให้ Program.cs เข้าถึงได้
     public static DateTime LastRun { get; set; } = DateTime.Now;
     private readonly IServiceProvider _serviceProvider;
@@ -16,12 +16,12 @@ public class IotWorkerService : BackgroundService
     private IConfiguration _conf;
     private IChannel? _channel; // เวอร์ชัน 7.x ใช้ IChannel แทน IModel
 
-    private readonly ILogger<IotWorkerService> _logger; // ประกาศตัวแปร logger
+    private readonly ILogger<IotWorkerService2> _logger; // ประกาศตัวแปร logger
 
-    public IotWorkerService(
+    public IotWorkerService2(
         IServiceProvider serviceProvider,
         IConfiguration conf,
-        ILogger<IotWorkerService> logger
+        ILogger<IotWorkerService2> logger
     )
     {
         _serviceProvider = serviceProvider;
@@ -45,7 +45,7 @@ public class IotWorkerService : BackgroundService
             _channel = await _connection.CreateChannelAsync();
 
             await _channel.QueueDeclareAsync(
-                queue: "iot_master_queue",
+                queue: "iot_master2_queue",
                 durable: true,
                 exclusive: false,
                 autoDelete: false
@@ -57,15 +57,14 @@ public class IotWorkerService : BackgroundService
             {
                 var body = ea.Body.ToArray();
                 var message = Encoding.UTF8.GetString(body);
-                var dto = JsonSerializer.Deserialize<TIotMasterCreateDto>(message);
-
+                var dto = JsonSerializer.Deserialize<TJigNetCheckerCrateDto>(message);
                 if (dto != null)
                 {
                     using var scope = _serviceProvider.CreateScope();
                     var db = scope.ServiceProvider.GetRequiredService<ProdCheckerDbContext>(); // ใส่ชื่อ DbContext ของคุณ
 
-                    var entity = new T_IOT_MASTER();
-                    TIotMasterMapper.ApplyToEntity(dto, entity);
+                    var entity = new T_JIGNET_CHECKER();
+                    TJigNetCheckerMapper.ApplyToEntity(dto, entity);
 
                     db.Add(entity);
                     try
@@ -75,14 +74,14 @@ public class IotWorkerService : BackgroundService
                     catch (Exception ex)
                     {
                         _logger.LogWarning("Exception :" + ex);
-                        // ยืนยันการรับข้อมูลแบบ Async
-                        await _channel.BasicAckAsync(ea.DeliveryTag, false);
                     }
+                    // ยืนยันการรับข้อมูลแบบ Async
+                    await _channel.BasicAckAsync(ea.DeliveryTag, false);
                 }
             };
 
             await _channel.BasicConsumeAsync(
-                queue: "iot_master_queue",
+                queue: "iot_master2_queue",
                 autoAck: false,
                 consumer: consumer
             );
@@ -93,27 +92,24 @@ public class IotWorkerService : BackgroundService
                 try
                 {
                     LastRun = DateTime.Now; // อัปเดตเวลาทุกครั้งที่ทำงาน
-
                     // รับค้างไว้จนกว่าจะหยุดแอป
                     await Task.Delay(1000, stoppingToken);
                 }
                 catch (OperationCanceledException)
                 {
                     // เมื่อมีการสั่งปิดแอป (stoppingToken ถูกเรียก) ให้จบการทำงานของ Loop อย่างสงบ
-                    _logger.LogWarning("Worker Service is stopping...");
-
-                    // // // --- ส่วนสำคัญ: ถ้า DB พัง ให้เขียนลงไฟล์ทันที ---
-                    //  var errorData = System.Text.Json.JsonSerializer.Serialize(req);
-                    //  Log.Error("DATABASE_ERROR: {Message} | DATA_TO_SAVE: {Data}", ex.Message, errorData);
-
+                    _logger.LogWarning("Worker Service2 is stopping...");
+                    // --- ส่วนสำคัญ: ถ้า DB พัง ให้เขียนลงไฟล์ทันที ---
+                    // var errorData = System.Text.Json.JsonSerializer.Serialize(req);
+                    // Log.Error("DATABASE_ERROR: {Message} | DATA_TO_SAVE: {Data}", ex.Message, errorData);
                     break;
                 }
                 catch (Exception ex)
                 {
-                    // // จัดการ Error อื่นๆ ที่อาจเกิดขึ้น
-                    //   var errorData = System.Text.Json.JsonSerializer.Serialize(req);
-                    //  Log.Error("DATABASE_ERROR: {Message} | DATA_TO_SAVE: {Data}", ex.Message, errorData);
-                    _logger.LogError(ex, "Error occurred in IotWorkerService");
+                    // จัดการ Error อื่นๆ ที่อาจเกิดขึ้น
+                    // var errorData = System.Text.Json.JsonSerializer.Serialize(req);
+                    // Log.Error("DATABASE_ERROR: {Message} | DATA_TO_SAVE: {Data}", ex.Message, errorData);
+                    _logger.LogError(ex, "Error occurred in IotWorkerService2");
                 }
             }
         }

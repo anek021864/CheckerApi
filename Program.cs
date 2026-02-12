@@ -5,36 +5,95 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using RabbitMQ.Client;
-using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// --- 1. Database & Services ---
 builder.Services.AddDbContext<ProdCheckerDbContext>(options =>
     options.UseOracle(builder.Configuration["Db:Oracle"])
 );
 
-// // --- ตั้งค่า Serilog ---
-// Log.Logger = new LoggerConfiguration()
-//     .WriteTo.Console()
-//     .WriteTo.File("Logs/db-fallback-.txt", rollingInterval: RollingInterval.Day)
-//     .CreateLogger();
-
-// builder.Host.UseSerilog(); // บอกให้ระบบใช้ Serilog แทนตัวเดิม
-
-// --- 1. Register Services ---
-
-var factory = new ConnectionFactory()
-{
-    HostName = builder.Configuration["RabbitMq:HostName"].ToString(), // ใส่ IP ของ Server RabbitMQ
-    UserName = builder.Configuration["RabbitMq:UserName"].ToString(), // บน Server ไม่ควรใช้ guest/guest
-    Password = builder.Configuration["RabbitMq:Password"].ToString(),
-    Port = Convert.ToInt32(builder.Configuration["RabbitMq:Port"]), // Port มาตรฐานของ RabbitMQ
-};
-
-// เชื่อมต่อ RabbitMQ แบบ Async ตามมาตรฐานเวอร์ชัน 7.x
-var connection = await factory.CreateConnectionAsync();
-builder.Services.AddSingleton<IConnection>(connection);
 builder.Services.AddSingleton<WorkerStateService>();
 builder.Services.AddHostedService<IotWorkerService>();
+builder.Services.AddHostedService<IotWorkerService2>();
+
+// --- 2. RabbitMQ Setup with Error Handling ---
+var factory = new ConnectionFactory()
+{
+    HostName = builder.Configuration["RabbitMq:HostName"]?.ToString(),
+    UserName = builder.Configuration["RabbitMq:UserName"]?.ToString(),
+    Password = builder.Configuration["RabbitMq:Password"]?.ToString(),
+    Port = builder.Configuration.GetValue<int>("RabbitMq:Port", 5672),
+};
+
+IConnection? connection = null;
+
+try
+{
+    // พยายามเชื่อมต่อ RabbitMQ ตอน Startup
+    connection = await factory.CreateConnectionAsync();
+}
+catch (Exception ex)
+{
+    // ถ้าเชื่อมต่อไม่ได้ ให้ Log ไว้ (ถ้ามี Logger) และปล่อยให้แอปไปต่อได้
+    Console.WriteLine($"[Warning] Could not connect to RabbitMQ on startup: {ex.Message}");
+}
+
+// Register Services (ส่งค่า connection เข้าไป แม้จะเป็น null)
+builder.Services.AddSingleton(factory);
+if (connection != null)
+{
+    builder.Services.AddSingleton<IConnection>(connection);
+}
+
+// --- 3. Monitoring (Health Checks) ---
+var healthBuilder = builder.Services.AddHealthChecks();
+
+// ตรวจสอบ RabbitMQ Health
+healthBuilder.AddCheck(
+    "RabbitMQ",
+    () =>
+    {
+        if (connection != null && connection.IsOpen)
+        {
+            return HealthCheckResult.Healthy("RabbitMQ is connected.");
+        }
+        return HealthCheckResult.Unhealthy("RabbitMQ is disconnected or was never initialized.");
+    },
+    tags: new[] { "rabbitmq" }
+);
+
+// ตรวจสอบ Oracle DB Health
+healthBuilder.AddOracle(builder.Configuration["Db:Oracle"]!, name: "Oracle-DB");
+healthBuilder.AddCheck(
+    "IotWorker1",
+    () =>
+    {
+        var isHealthy = (DateTime.Now - IotWorkerService.LastRun).TotalSeconds < 60;
+        return isHealthy
+            ? HealthCheckResult.Healthy()
+            : HealthCheckResult.Unhealthy("Worker is lagging");
+    }
+);
+healthBuilder.AddCheck(
+    "IotWorker2",
+    () =>
+    {
+        var isHealthy = (DateTime.Now - IotWorkerService2.LastRun).TotalSeconds < 60;
+        return isHealthy
+            ? HealthCheckResult.Healthy()
+            : HealthCheckResult.Unhealthy("Worker is lagging");
+    }
+);
+builder
+    .Services.AddHealthChecksUI(setup =>
+    {
+        setup.AddHealthCheckEndpoint("Main Services", "/health");
+        setup.SetEvaluationTimeInSeconds(10);
+    })
+    .AddInMemoryStorage();
+
+// --- 4. API & JSON Setup ---
 builder
     .Services.AddControllers()
     .AddJsonOptions(options =>
@@ -42,63 +101,21 @@ builder
         options.JsonSerializerOptions.Converters.Add(new DateTimeConverterUsingDateTimeParse());
     });
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(); // ใช้แบบ Default ไปก่อนเพื่อเช็คว่าผ่านไหม
-
-// --- 2. ตั้งค่า Monitoring (Health Checks) ---
-builder
-    .Services.AddHealthChecks()
-    .AddCheck(
-        "RabbitMQ",
-        () => connection.IsOpen ? HealthCheckResult.Healthy() : HealthCheckResult.Unhealthy()
-    )
-    .AddOracle(connectionString: builder.Configuration["Db:Oracle"]!, name: "Oracle-DB")
-    .AddCheck(
-        "Iot-Worker",
-        () =>
-        {
-            var state = builder
-                .Services.BuildServiceProvider()
-                .GetRequiredService<WorkerStateService>();
-            var silenceTime = DateTime.Now - state.LastRunTime;
-
-            // ถ้าเงียบไปนานเกิน 60 วินาที ถือว่า Unhealthy
-            if (silenceTime.TotalSeconds > 60)
-            {
-                return HealthCheckResult.Unhealthy(
-                    $"Worker silent for {silenceTime.TotalSeconds}s"
-                );
-            }
-
-            return HealthCheckResult.Healthy("Worker is pulsing");
-        },
-        tags: new[] { "worker" }
-    );
-
-builder
-    .Services.AddHealthChecksUI(setup =>
-    {
-        // ใส่ Full URL ของ API ของคุณ
-        setup.AddHealthCheckEndpoint("Main Services", "http://localhost:5027/health");
-        setup.SetEvaluationTimeInSeconds(10);
-    })
-    .AddInMemoryStorage();
+builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// --- 2. Configure HTTP Request Pipeline ---
-// ให้ Swagger แสดงเฉพาะตอน Development หรือจะเปิดตลอดก็ได้ถ้าใช้ใน Network ภายใน
-if (app.Environment.IsDevelopment() || true)
+// --- 5. Pipeline Configuration ---
+if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Checker API V1");
-        // ตั้งให้หน้า Swagger เป็นหน้าแรกเมื่อรันโปรเจกต์ (optional)
         c.RoutePrefix = string.Empty;
     });
 }
 
-// --- 4. Endpoints ---
 app.MapHealthChecks(
     "/health",
     new HealthCheckOptions
@@ -107,6 +124,7 @@ app.MapHealthChecks(
         ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse,
     }
 );
+
 app.UseHealthChecksUI(config =>
 {
     config.UIPath = "/monitor";
@@ -114,4 +132,14 @@ app.UseHealthChecksUI(config =>
 
 app.UseAuthorization();
 app.MapControllers();
+
+// Dispose connection เฉพาะเมื่อมันถูกสร้างขึ้นมาจริงๆ
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    if (connection != null && connection.IsOpen)
+    {
+        connection.Dispose();
+    }
+});
+
 app.Run();

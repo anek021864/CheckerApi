@@ -108,13 +108,4 @@ public class CheckerLogsController : ControllerBase
             return NotFound();
         }
     }
-
-    [HttpPost]
-    [Route("DownloadSteplist")]
-    public async Task<IActionResult> DownloadSteplist(
-        [FromBody] DownLoadSteplistDto downLoadSteplistDto
-    )
-    {
-        return Ok();
-    }
 }
