@@ -1,13 +1,15 @@
 using System.Text;
 using System.Text.Json;
 using JigNetApi.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RabbitMQ.Client;
 
 namespace JigNetApi;
 
 [ApiController]
-[Route("api/checker99-logs")]
+[Route("api/oracle99/checker-logs")]
+[ApiKeyRequired]
 public class CheckerLogsPocess99Controller : ControllerBase
 {
     private readonly ProdCheckerDbContext _db;

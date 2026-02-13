@@ -4,6 +4,7 @@ using JigNetApi.Data;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.OpenApi.Models;
 using RabbitMQ.Client;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -12,10 +13,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<ProdCheckerDbContext>(options =>
     options.UseOracle(builder.Configuration["Db:Oracle"])
 );
+builder.Services.AddDbContext<ProdCheckerPostgreSqlDqlDbContext>(options =>
+    options.UseNpgsql(builder.Configuration["Db:Postgres"])
+);
 
-builder.Services.AddSingleton<WorkerStateService>();
+// builder.Services.AddSingleton<WorkerStateService>();
 builder.Services.AddHostedService<IotWorkerService>();
 builder.Services.AddHostedService<IotWorkerService2>();
+builder.Services.AddHostedService<IotWorkerService3>();
 
 // --- 2. RabbitMQ Setup with Error Handling ---
 var factory = new ConnectionFactory()
@@ -66,7 +71,7 @@ healthBuilder.AddCheck(
 // ตรวจสอบ Oracle DB Health
 healthBuilder.AddOracle(builder.Configuration["Db:Oracle"]!, name: "Oracle-DB");
 healthBuilder.AddCheck(
-    "IotWorker1",
+    "IotWorker1 : checker log to oracle",
     () =>
     {
         var isHealthy = (DateTime.Now - IotWorkerService.LastRun).TotalSeconds < 60;
@@ -76,10 +81,20 @@ healthBuilder.AddCheck(
     }
 );
 healthBuilder.AddCheck(
-    "IotWorker2",
+    "IotWorker2 : checker process99 log to oracle",
     () =>
     {
         var isHealthy = (DateTime.Now - IotWorkerService2.LastRun).TotalSeconds < 60;
+        return isHealthy
+            ? HealthCheckResult.Healthy()
+            : HealthCheckResult.Unhealthy("Worker is lagging");
+    }
+);
+healthBuilder.AddCheck(
+    "IotWorker3 : checker log to postgreSQL ",
+    () =>
+    {
+        var isHealthy = (DateTime.Now - IotWorkerService3.LastRun).TotalSeconds < 60;
         return isHealthy
             ? HealthCheckResult.Healthy()
             : HealthCheckResult.Unhealthy("Worker is lagging");
@@ -101,7 +116,50 @@ builder
         options.JsonSerializerOptions.Converters.Add(new DateTimeConverterUsingDateTimeParse());
     });
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+
+// builder.Services.AddSwaggerGen();
+
+// builder.Services.AddSwaggerGen(c =>
+// {
+//     c.SwaggerDoc("v1", new OpenApiInfo { Title = "Checker API V1", Version = "v1" });
+
+//     // เพิ่ม Bearer Auth สำหรับ Swagger
+//     var securitySchema = new OpenApiSecurityScheme
+//     {
+//         Description =
+//             "JWT Authorization header using the Bearer scheme. Example: \"Bearer {token}\"",
+//         Name = "Authorization",
+//         In = ParameterLocation.Header,
+//         Type = SecuritySchemeType.Http,
+//         Scheme = "bearer",
+//         BearerFormat = "JWT",
+//         Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" },
+//     };
+//     c.AddSecurityDefinition("Bearer", securitySchema);
+//     c.AddSecurityRequirement(
+//         new OpenApiSecurityRequirement { { securitySchema, new[] { "Bearer" } } }
+//     );
+// });
+
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Checker API V1", Version = "v1" });
+
+    // 🔑 เพิ่ม API Key สำหรับ Swagger
+    var apiKeyScheme = new OpenApiSecurityScheme
+    {
+        Description = "API Key via X-API-KEY header",
+        Name = "X-API-KEY",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "ApiKeyScheme",
+        Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "ApiKey" },
+    };
+
+    c.AddSecurityDefinition("ApiKey", apiKeyScheme);
+
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement { { apiKeyScheme, new string[] { } } });
+});
 
 var app = builder.Build();
 
@@ -115,7 +173,7 @@ if (app.Environment.IsDevelopment())
         c.RoutePrefix = string.Empty;
     });
 }
-
+app.UseMiddleware<ApiKeyMiddleware>();
 app.MapHealthChecks(
     "/health",
     new HealthCheckOptions
@@ -130,7 +188,8 @@ app.UseHealthChecksUI(config =>
     config.UIPath = "/monitor";
 });
 
-app.UseAuthorization();
+//app.UseAuthorization();
+
 app.MapControllers();
 
 // Dispose connection เฉพาะเมื่อมันถูกสร้างขึ้นมาจริงๆ

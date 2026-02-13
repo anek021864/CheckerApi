@@ -8,7 +8,7 @@ using RabbitMQ.Client.Events;
 
 namespace JigNetApi;
 
-public class IotWorkerService2 : BackgroundService
+public class IotWorkerService3 : BackgroundService
 {
     public static DateTime LastRun { get; set; } = DateTime.Now;
     private readonly IServiceProvider _serviceProvider;
@@ -17,7 +17,7 @@ public class IotWorkerService2 : BackgroundService
     private IConnection? _connection;
     private IChannel? _channel;
 
-    public IotWorkerService2(
+    public IotWorkerService3(
         IServiceProvider serviceProvider,
         IConfiguration conf,
         ILogger<IotWorkerService3> logger
@@ -58,7 +58,7 @@ public class IotWorkerService2 : BackgroundService
             _channel = await _connection.CreateChannelAsync(cancellationToken: stoppingToken);
 
             await _channel.QueueDeclareAsync(
-                queue: "iot_master2_queue",
+                queue: "iot_master_postgre_queue",
                 durable: true,
                 exclusive: false,
                 autoDelete: false,
@@ -75,17 +75,20 @@ public class IotWorkerService2 : BackgroundService
                 {
                     var body = ea.Body.ToArray();
                     var message = Encoding.UTF8.GetString(body);
-                    var dto = JsonSerializer.Deserialize<TJigNetCheckerCrateDto>(message);
+                    var dto = JsonSerializer.Deserialize<TIotMasterCreateDto>(message);
 
                     if (dto != null)
                     {
                         using var scope = _serviceProvider.CreateScope();
-                        var db = scope.ServiceProvider.GetRequiredService<ProdCheckerDbContext>(); // ใส่ชื่อ DbContext ของคุณ
+                        var db =
+                            scope.ServiceProvider.GetRequiredService<ProdCheckerPostgreSqlDqlDbContext>();
 
-                        var entity = new T_JIGNET_CHECKER();
-                        TJigNetCheckerMapper.ApplyToEntity(dto, entity);
+                        var entity = new t_iot_master();
+                        TIotMasterMapper.ApplyToPostgreSqlEntity(dto, entity);
+
                         db.Add(entity);
                         await db.SaveChangesAsync(stoppingToken);
+
                         await _channel.BasicAckAsync(ea.DeliveryTag, false);
                     }
                 }
@@ -97,7 +100,12 @@ public class IotWorkerService2 : BackgroundService
                 }
             };
 
-            await _channel.BasicConsumeAsync("iot_master2_queue", false, consumer, stoppingToken);
+            await _channel.BasicConsumeAsync(
+                "iot_master_postgre_queue",
+                false,
+                consumer,
+                stoppingToken
+            );
 
             // รอจนกว่าจะมีการ Cancel
             await Task.Delay(Timeout.Infinite, stoppingToken);

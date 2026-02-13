@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("JigNetApi")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+583cf3a356b943bd6b0df035c1b7358fd71dea11")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+65a2434975d0d0ba2e4493a6feba17fd5c5e0b65")]
 [assembly: System.Reflection.AssemblyProductAttribute("JigNetApi")]
 [assembly: System.Reflection.AssemblyTitleAttribute("JigNetApi")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

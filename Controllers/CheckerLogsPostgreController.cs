@@ -12,15 +12,16 @@ using RabbitMQ.Client;
 namespace JigNetApi;
 
 [ApiController]
-[Route("api/checker-logs")]
-public class CheckerLogsController : ControllerBase
+[Route("api/postgre/checker-logs")]
+[ApiKeyRequired]
+public class CheckerLogsPostgreController : ControllerBase
 {
-    private readonly ProdCheckerDbContext _db;
+    private readonly ProdCheckerPostgreSqlDqlDbContext _db;
     private readonly IConnection _connection;
     private readonly IConfiguration _conf;
 
-    public CheckerLogsController(
-        ProdCheckerDbContext db,
+    public CheckerLogsPostgreController(
+        ProdCheckerPostgreSqlDqlDbContext db,
         IConfiguration conf,
         IConnection connection
     )
@@ -39,7 +40,7 @@ public class CheckerLogsController : ControllerBase
         {
             using var channel = await _connection.CreateChannelAsync();
             await channel.QueueDeclareAsync(
-                queue: "iot_master_queue",
+                queue: "iot_master_postgre_queue",
                 durable: true,
                 exclusive: false,
                 autoDelete: false,
@@ -52,7 +53,7 @@ public class CheckerLogsController : ControllerBase
 
             await channel.BasicPublishAsync(
                 exchange: "",
-                routingKey: "iot_master_queue",
+                routingKey: "iot_master_postgre_queue",
                 body: body
             );
 
@@ -67,13 +68,13 @@ public class CheckerLogsController : ControllerBase
     [HttpGet("{id}")]
     public async Task<IActionResult> Get(string id)
     {
-        var entity = await _db.Set<T_IOT_MASTER>()
+        var entity = await _db.Set<t_iot_master>()
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.ID == id);
+            .FirstOrDefaultAsync(x => x.id == id);
 
         if (entity is null)
             return NotFound();
-        return Ok(TIotMasterMapper.ToDto(entity));
+        return Ok(TIotMasterMapper.ToDtoPostgre(entity));
     }
 
     [HttpGet("{ProdSn}/{CheckerName}")]
@@ -82,24 +83,24 @@ public class CheckerLogsController : ControllerBase
         DateTime startDate = DateTime.Now.AddDays(-14); // ย้อนหลัง 7 วัน
         DateTime endDate = DateTime.Now;
         var entity = await _db
-            .T_IOT_MASTERs.Where(i =>
-                i.PRODUCT_SN == ProdSn
-                && i.CHEKER_NAME == CheckerName
-                && i.PRODUCTIONTIME >= startDate
-                && i.PRODUCTIONTIME <= endDate
+            .t_iot_masters.Where(i =>
+                i.product_sn == ProdSn
+                && i.cheker_name == CheckerName
+                && i.productiontime >= startDate
+                && i.productiontime <= endDate
             )
-            .OrderByDescending(i => i.PRODUCTIONTIME)
-            .Select(t => new { t.CHEKER_NAME, t.RESULT })
+            .OrderByDescending(i => i.productiontime)
+            .Select(t => new { t.cheker_name, t.result })
             .FirstOrDefaultAsync();
 
         if (entity is null)
             return NotFound();
 
-        if (entity.RESULT == 1)
+        if (entity.result == 1)
         {
             return Ok(new { resutl = "PASS" });
         }
-        else if (entity.RESULT == 0)
+        else if (entity.result == 0)
         {
             return UnprocessableEntity(new { result = "FAIL" });
         }
@@ -107,5 +108,32 @@ public class CheckerLogsController : ControllerBase
         {
             return NotFound();
         }
+    }
+
+    [HttpGet("{ProdSn}/{CheckerName}/{Date}")]
+    public async Task<IActionResult> ListData(string ProdSn, string CheckerName, string Date)
+    {
+        if (!DateTime.TryParse(Date, out DateTime parsedDate))
+        {
+            return BadRequest("รูปแบบวันที่ไม่ถูกต้อง กรุณาใช้ d-M-yyyy");
+        }
+
+        DateTime startDate = parsedDate.AddDays(-14); // ย้อนหลัง 7 วัน
+        DateTime endDate = DateTime.Now;
+        var entity = await _db
+            .t_iot_masters.Where(i =>
+                i.product_sn == ProdSn
+                && i.cheker_name == CheckerName
+                && i.productiontime >= startDate
+                && i.productiontime <= endDate
+            )
+            .OrderByDescending(i => i.productiontime)
+            .FirstOrDefaultAsync();
+
+        if (entity is null)
+        {
+            return NotFound();
+        }
+        return Ok(entity);
     }
 }
